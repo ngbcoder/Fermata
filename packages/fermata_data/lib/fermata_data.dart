@@ -10,6 +10,7 @@ export 'src/db/app_database.dart';
 export 'src/db/tables.dart';
 export 'src/import/import_service.dart';
 export 'src/import/music_xml_rasteriser.dart';
+export 'src/import/web_import_server.dart';
 export 'src/repositories/annotation_repository.dart';
 export 'src/repositories/organization_repositories.dart';
 export 'src/repositories/score_repository.dart';
