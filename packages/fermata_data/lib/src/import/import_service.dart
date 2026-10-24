@@ -40,6 +40,9 @@ class ImportCandidate {
   /// is read in pure Dart — no `archive` dependency and no native code.
   bool get isMusicXml => extension == '.musicxml' || extension == '.mxl';
 
+  /// A Standard MIDI File.
+  bool get isMidi => extension == '.mid' || extension == '.midi';
+
   /// Image formats the document picker is allowed to return.
   static const Set<String> supportedImageExtensions = {
     '.jpg',
@@ -54,11 +57,13 @@ class ImportCandidate {
     '.pdf',
     '.musicxml',
     '.mxl',
+    '.mid',
+    '.midi',
     ...supportedImageExtensions,
   };
 
   bool get isSupported =>
-      isPdf || isMusicXml || supportedImageExtensions.contains(extension);
+      isPdf || isMusicXml || isMidi || supportedImageExtensions.contains(extension);
 }
 
 /// One file that was imported, and the pages it contributed.
@@ -226,7 +231,7 @@ class ImportService {
       throw ImportException(
         candidates.isEmpty
             ? 'No files were selected.'
-            : 'None of the selected files are a PDF or a supported image.',
+            : 'None of the selected files are a supported score, image, MusicXML or MIDI.',
       );
     }
 
@@ -291,7 +296,22 @@ class ImportService {
       // a future higher-resolution re-render would read.
       final List<String> renderedPageFiles;
       final int pageCount;
-      if (candidate.isMusicXml) {
+      if (candidate.isMidi) {
+        // A MIDI file is not a page image, but importing it as a library entry
+        // still requires it to be a well-formed Standard MIDI File: a truncated
+        // or damaged file must be refused rather than stored as a dead score.
+        try {
+          const SmfParser().parse(
+            await File(candidate.sourcePath).readAsBytes(),
+          );
+        } on MidiFormatException catch (error) {
+          throw ImportException(
+            '"${candidate.fileName}" is not a valid MIDI file: $error',
+          );
+        }
+        pageCount = 1;
+        renderedPageFiles = const [];
+      } else if (candidate.isMusicXml) {
         final render = await _renderMusicXml(candidate);
         if (render.pages.isEmpty) {
           throw ImportException(

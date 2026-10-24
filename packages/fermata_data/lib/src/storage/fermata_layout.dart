@@ -31,6 +31,7 @@ class FermataLayout {
   String get thumbnailsPath => p.join(root.path, 'thumbnails');
   String get exportsPath => p.join(root.path, 'exports');
   String get webPath => p.join(root.path, 'web');
+  String get soundfontsPath => p.join(root.path, 'soundfonts');
 
   String scoreDirectory(String scoreId) => p.join(scoresPath, scoreId);
   String scoreSourceDirectory(String scoreId) =>
@@ -42,6 +43,8 @@ class FermataLayout {
 
   String midiFile(String midiId) => p.join(midiPath, '$midiId.mid');
 
+  String soundfontFile(String name) => p.join(soundfontsPath, name);
+
   /// Creates every directory the layout expects to exist.
   Future<void> ensureDirectories() async {
     for (final path in <String>[
@@ -50,6 +53,8 @@ class FermataLayout {
       midiPath,
       thumbnailsPath,
       exportsPath,
+      webPath,
+      soundfontsPath,
     ]) {
       await Directory(path).create(recursive: true);
     }

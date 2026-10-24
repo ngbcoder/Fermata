@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../providers/accessibility_providers.dart';
+import '../../providers/backup_providers.dart';
 import '../../providers/platform_bridge.dart';
 import '../../update/obtainium_app.dart';
 import '../../update/update_service.dart';
@@ -33,16 +35,8 @@ class SettingsScreen extends ConsumerWidget {
             title: 'Page-turn pedal',
             subtitle: 'Bind a Bluetooth pedal to next/previous page.',
           ),
-          _PendingTile(
-            icon: Icons.text_fields_rounded,
-            title: 'Text size and contrast',
-            subtitle: 'Scales the app chrome, not the score.',
-          ),
-          _PendingTile(
-            icon: Icons.archive_rounded,
-            title: 'Backup and restore',
-            subtitle: 'Export the library and annotations to a file.',
-          ),
+          _TextScaleTile(),
+          _BackupTile(),
         ],
       ),
     );
@@ -77,6 +71,51 @@ class _SectionHeader extends StatelessWidget {
         style: theme.textTheme.labelLarge?.copyWith(
           color: theme.colorScheme.primary,
         ),
+      ),
+    );
+  }
+}
+
+class _BackupTile extends ConsumerWidget {
+  const _BackupTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final messenger = ScaffoldMessenger.of(context);
+    return ListTile(
+      leading: const Icon(Icons.archive_rounded),
+      title: const Text('Backup and restore'),
+      subtitle: const Text('Export the library and annotations to a file.'),
+      trailing: const Icon(Icons.chevron_right_rounded),
+      onTap: () async {
+        final service = await ref.read(backupServiceProvider.future);
+        final file = await service.exportAll();
+        if (!context.mounted) return;
+        messenger.showSnackBar(
+          SnackBar(content: Text('Backup written to ${file.path}')),
+        );
+      },
+    );
+  }
+}
+
+class _TextScaleTile extends ConsumerWidget {
+  const _TextScaleTile();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final scale = ref.watch(textScaleProvider);
+    return ListTile(
+      leading: const Icon(Icons.text_fields_rounded),
+      title: const Text('Text size'),
+      subtitle: Slider(
+        value: scale,
+        min: 0.8,
+        max: 1.6,
+        divisions: 8,
+        label: scale.toStringAsFixed(2),
+        onChanged: (value) =>
+            ref.read(textScaleProvider.notifier).setScale(value),
       ),
     );
   }

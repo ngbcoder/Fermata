@@ -1,23 +1,32 @@
 import 'package:fermata_core/fermata_core.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'features/library/library_screen.dart';
 import 'features/setlists/setlists_screen.dart';
 import 'features/settings/settings_screen.dart';
 import 'features/viewer/score_viewer_screen.dart';
+import 'providers/accessibility_providers.dart';
 import 'theme/fermata_theme.dart';
 
-class FermataApp extends StatelessWidget {
+class FermataApp extends ConsumerWidget {
   const FermataApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final scale = ref.watch(textScaleProvider);
     return MaterialApp(
       title: 'Fermata',
       debugShowCheckedModeBanner: false,
       theme: FermataTheme.light(),
       darkTheme: FermataTheme.dark(),
       themeMode: ThemeMode.system,
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(
+          textScaler: TextScaler.linear(scale),
+        ),
+        child: child!,
+      ),
       home: const AppShell(),
     );
   }

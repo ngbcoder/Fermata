@@ -96,6 +96,26 @@ class FileStore {
     }
   }
 
+  /// Copies [source] into the MIDI directory under [midiId].
+  ///
+  /// Returns the relative file name stored on the [MidiFile].
+  Future<String> importMidiSource({
+    required String midiId,
+    required File source,
+  }) async {
+    final targetDirectory = Directory(layout.midiPath);
+    await targetDirectory.create(recursive: true);
+
+    final name = '$midiId.mid';
+    final target = File(p.join(targetDirectory.path, name));
+    try {
+      await source.copy(target.path);
+    } on FileSystemException catch (error) {
+      throw StorageException('Could not copy ${source.path}', cause: error);
+    }
+    return name;
+  }
+
   Future<void> deleteMidiAsset(String midiId) async {
     final file = File(layout.midiFile(midiId));
     if (file.existsSync()) {

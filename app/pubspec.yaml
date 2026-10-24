@@ -2,7 +2,7 @@ name: fermata
 description: "Fermata - a sheet music keeping and practice app"
 publish_to: 'none'
 
-version: 1.0.2+1
+version: 1.0.3+4d fix issues #12/#13)
 # Obtainium compares a release tag against the installed versionName to decide
 # whether an update exists, and Android compares versionCode to decide whether
 # an install is an upgrade. Bump the `+N` on every release; see
@@ -30,6 +30,9 @@ dependencies:
   # Code is MIT, the bundled Bravura font is OFL. See docs/musicxml-import.md.
   crisp_notation: 0.7.0
 
+  # MIDI synthesis. Wrapped behind AudioEngine so it stays swappable.
+  flutter_midi_engine: ^0.1.5
+
   # State management.
   flutter_riverpod: ^3.4.3
 
@@ -39,6 +42,9 @@ dependencies:
   # callback that enables foreign keys.
   drift_flutter: ^0.3.1
   sqlite3: ^3.0.0
+
+  # Backup archives.
+  archive: ^4.0.9
 
   # Import pipeline.
   file_picker: ^13.1.0

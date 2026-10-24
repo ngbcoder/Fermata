@@ -15,22 +15,36 @@ class LibraryFilter {
     this.searchText = '',
     this.sort = ScoreSort.recentlyOpened,
     this.grid = true,
+    this.tagIds = const <String>{},
+    this.setlistId,
   });
 
   final String searchText;
   final ScoreSort sort;
   final bool grid;
+  final Set<String> tagIds;
+  final String? setlistId;
 
-  ScoreQuery get query => ScoreQuery(searchText: searchText, sort: sort);
+  ScoreQuery get query => ScoreQuery(
+    searchText: searchText,
+    sort: sort,
+    tagIds: tagIds,
+    setlistId: setlistId,
+  );
 
   LibraryFilter copyWith({
     String? searchText,
     ScoreSort? sort,
     bool? grid,
+    Set<String>? tagIds,
+    String? setlistId,
+    bool clearSetlist = false,
   }) => LibraryFilter(
     searchText: searchText ?? this.searchText,
     sort: sort ?? this.sort,
     grid: grid ?? this.grid,
+    tagIds: tagIds ?? this.tagIds,
+    setlistId: clearSetlist ? null : (setlistId ?? this.setlistId),
   );
 }
 
@@ -171,7 +185,8 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
 }
 
 extension on LibraryFilter {
-  bool get hasFilters => searchText.trim().isNotEmpty;
+  bool get hasFilters =>
+      searchText.trim().isNotEmpty || tagIds.isNotEmpty || setlistId != null;
 }
 
 class _ScoreCollection extends StatelessWidget {

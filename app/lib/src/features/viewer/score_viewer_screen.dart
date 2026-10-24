@@ -1,9 +1,16 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:fermata_core/fermata_core.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../audio/midi_playback_controller.dart';
+import '../../providers/audio_providers.dart';
 import '../../providers/library_providers.dart';
 import '../library/library_screen.dart';
+import '../midi/midi_visualizer_screen.dart';
 import 'bar_navigation_bar.dart';
 import 'brush_toolbar.dart';
 import 'page_stack.dart';
@@ -40,6 +47,16 @@ class _ScoreViewerScreenState extends ConsumerState<ScoreViewerScreen> {
   late final PageController _pageController;
   int _currentPage = 0;
   bool _drawingMode = false;
+  bool _eraserMode = false;
+  String? _activeLayerId;
+  MidiPlaybackController? _midiController;
+  bool _downloadingSoundfont = false;
+  Timer? _autoScrollTimer;
+  bool _autoScrolling = false;
+
+  /// Undo/redo stacks for strokes committed on this score.
+  final List<Stroke> _undoStack = <Stroke>[];
+  final List<Stroke> _redoStack = <Stroke>[];
 
   /// Whether detection has run, and what it found.
   ///
@@ -73,13 +90,30 @@ class _ScoreViewerScreenState extends ConsumerState<ScoreViewerScreen> {
     super.initState();
     _transformController = TransformationController();
     _pageController = PageController();
+    HardwareKeyboard.instance.addHandler(_handleKeyEvent);
   }
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
+    _autoScrollTimer?.cancel();
     _transformController.dispose();
     _pageController.dispose();
     super.dispose();
+  }
+
+  bool _handleKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent) return false;
+    if (event.logicalKey == LogicalKeyboardKey.arrowRight ||
+        event.logicalKey == LogicalKeyboardKey.space) {
+      _step(1);
+      return true;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+      _step(-1);
+      return true;
+    }
+    return false;
   }
 
   /// Asks the renderer for each page's bars, filling [barMode] in when they all
@@ -257,8 +291,85 @@ class _ScoreViewerScreenState extends ConsumerState<ScoreViewerScreen> {
       appBar: AppBar(
         title: Text(widget.title, overflow: TextOverflow.ellipsis),
         actions: [
+        IconButton(
+          tooltip: 'Undo',
+          onPressed: _undoStack.isEmpty ? null : _undo,
+          icon: const Icon(Icons.undo_rounded),
+        ),
+        IconButton(
+          tooltip: 'Redo',
+          onPressed: _redoStack.isEmpty ? null : _redo,
+          icon: const Icon(Icons.redo_rounded),
+        ),
+        pagesValue.maybeWhen(
+          data: (pages) => Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Center(
+              child: Text(
+                '${_currentPage + 1}/${pages.length}',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+            ),
+          ),
+          orElse: () => const SizedBox.shrink(),
+        ),
+        IconButton(
+          tooltip: 'Zoom out',
+            onPressed: () => _zoom(0.8),
+            icon: const Icon(Icons.zoom_out_rounded),
+          ),
           IconButton(
-            tooltip: _drawingMode ? 'Done annotating' : 'Annotate',
+            tooltip: 'Zoom in',
+            onPressed: () => _zoom(1.25),
+            icon: const Icon(Icons.zoom_in_rounded),
+          ),
+          IconButton(
+            tooltip: 'Reset zoom',
+            onPressed: () => _transformController.value = Matrix4.identity(),
+            icon: const Icon(Icons.center_focus_strong_rounded),
+          ),
+          IconButton(
+            tooltip: 'Layers',
+            onPressed: _showLayerPicker,
+            icon: const Icon(Icons.layers_rounded),
+          ),
+        IconButton(
+          tooltip: _autoScrolling ? 'Stop auto-scroll' : 'Auto-scroll',
+          onPressed: _toggleAutoScroll,
+          icon: Icon(
+            _autoScrolling ? Icons.pause_rounded : Icons.play_circle_outline_rounded,
+          ),
+        ),
+        IconButton(
+          tooltip: 'Visualizer',
+          onPressed: _openVisualizer,
+          icon: const Icon(Icons.piano_rounded),
+        ),
+        IconButton(
+          tooltip: _downloadingSoundfont
+              ? 'Downloading soundfont...'
+              : (_midiController?.isPlaying == true ? 'Stop' : 'Play MIDI'),
+          onPressed: _downloadingSoundfont ? null : _toggleMidiPlayback,
+          icon: _downloadingSoundfont
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : Icon(
+                  _midiController?.isPlaying == true
+                      ? Icons.stop_rounded
+                      : Icons.play_arrow_rounded,
+                ),
+        ),
+        IconButton(
+          tooltip: _eraserMode ? 'Done erasing' : 'Eraser',
+          isSelected: _eraserMode,
+          onPressed: () => setState(() => _eraserMode = !_eraserMode),
+          icon: const Icon(Icons.auto_fix_high_rounded),
+        ),
+        IconButton(
+          tooltip: _drawingMode ? 'Done annotating' : 'Annotate',
             isSelected: _drawingMode,
             onPressed: pagesValue.maybeWhen(
               data: (pages) => pages.isEmpty
@@ -283,9 +394,12 @@ class _ScoreViewerScreenState extends ConsumerState<ScoreViewerScreen> {
               pageController: _pageController,
               transformationController: _transformController,
               drawingMode: _drawingMode,
+              eraserMode: _eraserMode,
+              activeLayerId: _activeLayerId,
               onPageChanged: (index) => setState(() => _currentPage = index),
               onTapZone: (zone) => _onTapZone(zone, value),
               onStrokeCompleted: _persistStroke,
+              onStrokeErased: _eraseStroke,
             ),
             if (_drawingMode) const _DrawingHint(),
           ],
@@ -313,6 +427,27 @@ class _ScoreViewerScreenState extends ConsumerState<ScoreViewerScreen> {
         orElse: () => null,
       ),
     );
+  }
+
+  void _toggleAutoScroll() {
+    if (_autoScrolling) {
+      _autoScrollTimer?.cancel();
+      _autoScrollTimer = null;
+      setState(() => _autoScrolling = false);
+      return;
+    }
+    _autoScrolling = true;
+    _autoScrollTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      if (!mounted) return;
+      final pages = ref.read(scorePagesProvider(widget.scoreId)).value;
+      if (pages == null) return;
+      if (_currentPage >= pages.length - 1) {
+        _toggleAutoScroll();
+        return;
+      }
+      _step(1);
+    });
+    setState(() {});
   }
 
   /// Steps the page when bar mode is off.
@@ -363,9 +498,184 @@ class _ScoreViewerScreenState extends ConsumerState<ScoreViewerScreen> {
     }
   }
 
+  /// Scales the current transform about the viewport centre so zooming does not
+  /// drift the page into a corner.
+  void _zoom(double factor) {
+    final size = context.size;
+    if (size == null || size.isEmpty) return;
+    final current = _transformController.value;
+    final currentScale = current.getMaxScaleOnAxis();
+    final targetScale = (currentScale * factor).clamp(0.5, 8.0);
+    final ratio = targetScale / currentScale;
+    if (ratio == 1.0) return;
+
+    final focal = Offset(size.width / 2, size.height / 2);
+    final next = current.clone()
+      ..translateByDouble(focal.dx, focal.dy, 0, 1)
+      ..scaleByDouble(ratio, ratio, ratio, 1)
+      ..translateByDouble(-focal.dx, -focal.dy, 0, 1);
+    _transformController.value = next;
+  }
+
+  Future<void> _eraseStroke(String strokeId) async {
+    final repository = await ref.read(annotationRepositoryProvider.future);
+    // Find the stroke in undo stack to push to redo? We don't have full object.
+    // Delete and record an undo entry is not possible without fetching; skip undo
+    // for erased strokes for now.
+    await repository.deleteStroke(strokeId);
+  }
+
+  Future<void> _showLayerPicker() async {
+    final repository = await ref.read(annotationRepositoryProvider.future);
+    final layers = await repository.getLayers(widget.scoreId);
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            for (final layer in layers)
+              ListTile(
+                title: Text(layer.name),
+                leading: Icon(
+                  layer.visible
+                      ? Icons.visibility_rounded
+                      : Icons.visibility_off_rounded,
+                ),
+                selected: layer.id == _activeLayerId,
+                onTap: () {
+                  setState(() => _activeLayerId = layer.id);
+                  Navigator.of(sheetContext).pop();
+                },
+                trailing: IconButton(
+                  icon: Icon(
+                    layer.visible
+                        ? Icons.visibility_rounded
+                        : Icons.visibility_off_rounded,
+                  ),
+                  onPressed: () async {
+                    final navigator = Navigator.of(sheetContext);
+                    await repository.setLayerVisible(layer, visible: !layer.visible);
+                    if (mounted) navigator.pop();
+                  },
+                ),
+              ),
+            ListTile(
+              leading: const Icon(Icons.add_rounded),
+              title: const Text('New layer'),
+              onTap: () async {
+                final navigator = Navigator.of(sheetContext);
+                await repository.createLayer(
+                  scoreId: widget.scoreId,
+                  name: 'Layer ${layers.length + 1}',
+                );
+                if (mounted) navigator.pop();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _toggleMidiPlayback() async {
+    if (_midiController?.isPlaying == true) {
+      _midiController?.stop();
+      if (mounted) setState(() {});
+      return;
+    }
+    final score = await ref.read(scoreRepositoryProvider.future).then((r) => r.getScore(widget.scoreId));
+    final midiId = score?.linkedMidiId;
+    if (midiId == null) return;
+
+    final fileStore = await ref.read(fileStoreProvider.future);
+    final engine = ref.read(audioEngineProvider);
+
+    // Ensure a soundfont is available, downloading on demand the first time.
+    final soundfont = File(fileStore.layout.soundfontFile('Yamaha_C7_Normalized.sf2'));
+    if (!soundfont.existsSync()) {
+      if (mounted) setState(() => _downloadingSoundfont = true);
+      try {
+        final request = await HttpClient().getUrl(
+          Uri.parse('https://musical-artifacts.com/artifacts/1896/Yamaha_C7__Normalized_.sf2'),
+        );
+        final response = await request.close();
+        final sink = soundfont.openWrite();
+        await response.pipe(sink);
+        await sink.flush();
+        await sink.close();
+      } finally {
+        if (mounted) setState(() => _downloadingSoundfont = false);
+      }
+    }
+    if (soundfont.existsSync()) {
+      await engine.loadSoundfont(soundfont.path);
+    }
+
+    final bytes = await File(fileStore.layout.midiFile(midiId)).readAsBytes();
+    final midiScore = SmfMidiScore.fromBytes(bytes);
+    _midiController = MidiPlaybackController(engine: engine, score: midiScore);
+    _midiController!.play();
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _openVisualizer() async {
+    if (_midiController == null) {
+      final score = await ref.read(scoreRepositoryProvider.future).then((r) => r.getScore(widget.scoreId));
+      final midiId = score?.linkedMidiId;
+      if (midiId == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No MIDI linked to this score.')),
+          );
+        }
+        return;
+      }
+      final fileStore = await ref.read(fileStoreProvider.future);
+      final bytes = await File(fileStore.layout.midiFile(midiId)).readAsBytes();
+      final midiScore = SmfMidiScore.fromBytes(bytes);
+      final engine = ref.read(audioEngineProvider);
+      _midiController = MidiPlaybackController(engine: engine, score: midiScore);
+      if (mounted) setState(() {});
+    }
+    if (!mounted || _midiController == null) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => MidiVisualizerScreen(
+          score: _midiController!.score,
+          currentTick: _midiController!.currentTick,
+        ),
+      ),
+    );
+  }
+
   Future<void> _persistStroke(Stroke stroke) async {
     final repository = await ref.read(annotationRepositoryProvider.future);
     await repository.upsertStroke(stroke);
+    if (!mounted) return;
+    setState(() {
+      _undoStack.add(stroke);
+      _redoStack.clear();
+    });
+  }
+
+  Future<void> _undo() async {
+    if (_undoStack.isEmpty) return;
+    final stroke = _undoStack.removeLast();
+    final repository = await ref.read(annotationRepositoryProvider.future);
+    await repository.deleteStroke(stroke.id);
+    if (!mounted) return;
+    setState(() => _redoStack.add(stroke));
+  }
+
+  Future<void> _redo() async {
+    if (_redoStack.isEmpty) return;
+    final stroke = _redoStack.removeLast();
+    final repository = await ref.read(annotationRepositoryProvider.future);
+    await repository.upsertStroke(stroke);
+    if (!mounted) return;
+    setState(() => _undoStack.add(stroke));
   }
 }
 

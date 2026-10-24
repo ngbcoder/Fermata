@@ -15,6 +15,10 @@ import 'package:pdfrx/pdfrx.dart';
 class PdfrxPdfPageCounter implements PdfPageCounter {
   @override
   Future<int> pageCount(String absolutePath) async {
+    // pdfrx's native initialisation must have run before the first document
+    // is opened. The renderer does this lazily; import can run first, so do
+    // it here too rather than relying on ordering.
+    await pdfrxFlutterInitialize();
     final document = await PdfDocument.openFile(absolutePath);
     try {
       final count = document.pages.length;

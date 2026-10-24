@@ -1,6 +1,7 @@
 import 'dart:ui' as ui;
 
 import 'package:fermata_core/fermata_core.dart';
+import 'package:fermata_data/fermata_data.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -106,18 +107,24 @@ class PageStack extends ConsumerWidget {
     required this.pageController,
     required this.transformationController,
     required this.drawingMode,
+    this.eraserMode = false,
+    this.activeLayerId,
     required this.onPageChanged,
     required this.onTapZone,
     required this.onStrokeCompleted,
+    this.onStrokeErased,
   });
 
   final List<ScorePage> pages;
   final PageController pageController;
   final TransformationController transformationController;
   final bool drawingMode;
+  final bool eraserMode;
+  final String? activeLayerId;
   final ValueChanged<int> onPageChanged;
   final ValueChanged<TapZone> onTapZone;
   final ValueChanged<Stroke> onStrokeCompleted;
+  final ValueChanged<String>? onStrokeErased;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -138,8 +145,10 @@ class PageStack extends ConsumerWidget {
       // fingering still needs zooming without leaving the pen.
       panEnabled: !drawingMode,
       scaleEnabled: true,
-      minScale: 1,
-      maxScale: 6,
+      minScale: 0.5,
+      maxScale: 8,
+      boundaryMargin: const EdgeInsets.all(double.infinity),
+      clipBehavior: Clip.none,
       child: PageView.builder(
         controller: pageController,
         onPageChanged: onPageChanged,
@@ -148,8 +157,11 @@ class PageStack extends ConsumerWidget {
           page: pages[index],
           renderer: renderer,
           drawingMode: drawingMode,
+          eraserMode: eraserMode,
+          activeLayerId: activeLayerId,
           onTapZone: onTapZone,
           onStrokeCompleted: onStrokeCompleted,
+          onStrokeErased: onStrokeErased,
         ),
       ),
     );
@@ -163,15 +175,21 @@ class ScorePageView extends ConsumerStatefulWidget {
     required this.page,
     required this.renderer,
     required this.drawingMode,
+    this.eraserMode = false,
+    this.activeLayerId,
     required this.onTapZone,
     required this.onStrokeCompleted,
+    this.onStrokeErased,
   });
 
   final ScorePage page;
   final PageRenderer renderer;
   final bool drawingMode;
+  final bool eraserMode;
+  final String? activeLayerId;
   final ValueChanged<TapZone> onTapZone;
   final ValueChanged<Stroke> onStrokeCompleted;
+  final ValueChanged<String>? onStrokeErased;
 
   @override
   ConsumerState<ScorePageView> createState() => _ScorePageViewState();
@@ -182,6 +200,7 @@ class _ScorePageViewState extends ConsumerState<ScorePageView> {
   Size _logicalSize = Size.zero;
   bool _pending = true;
   Size? _lastAvailableSize;
+  List<Stroke> _strokes = const <Stroke>[];
 
   @override
   void initState() {
@@ -250,6 +269,7 @@ class _ScorePageViewState extends ConsumerState<ScorePageView> {
     );
     final strokes =
         ref.watch(strokesForPageProvider(pageRef)).value ?? const <Stroke>[];
+    _strokes = strokes;
     final live = ref.watch(liveStrokeProvider);
     final brush = ref.watch(brushProvider);
 
@@ -278,12 +298,14 @@ class _ScorePageViewState extends ConsumerState<ScorePageView> {
             height: _logicalSize.height,
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
-              onTapUp: widget.drawingMode
-                  ? null
-                  : (details) => _reportTap(
-                      details.localPosition,
-                      _logicalSize,
-                    ),
+              onTapUp: widget.eraserMode
+                   ? (details) => _eraseStrokeAt(details.localPosition, _logicalSize)
+                   : (widget.drawingMode
+                       ? null
+                       : (details) => _reportTap(
+                           details.localPosition,
+                           _logicalSize,
+                         )),
               onPanStart: widget.drawingMode
                   ? (details) => _beginStroke(
                       details.localPosition,
@@ -341,6 +363,30 @@ class _ScorePageViewState extends ConsumerState<ScorePageView> {
     }
   }
 
+  void _eraseStrokeAt(Offset local, Size box) {
+    if (box.isEmpty || box.width <= 0 || box.height <= 0) return;
+    if (_strokes.isEmpty) return;
+    final nx = local.dx / box.width;
+    final ny = local.dy / box.height;
+    // find stroke with min distance
+    String? candidate;
+    var minDist = double.infinity;
+    for (final stroke in _strokes) {
+      for (final point in stroke.points) {
+        final dx = point.position.x - nx;
+        final dy = point.position.y - ny;
+        final dist = dx * dx + dy * dy;
+        if (dist < minDist) {
+          minDist = dist;
+          candidate = stroke.id;
+        }
+      }
+    }
+    if (candidate != null && minDist <= 0.03 * 0.03) {
+      widget.onStrokeErased?.call(candidate);
+    }
+  }
+
   void _beginStroke(Offset local, Size box) {
     // Until the page has been measured _logicalSize is zero, and dividing by
     // it would yield infinities rather than coordinates.
@@ -371,19 +417,22 @@ class _ScorePageViewState extends ConsumerState<ScorePageView> {
     }
 
     final brush = ref.read(brushProvider);
-    final layer = await ref.read(
-      activeLayerProvider(widget.page.scoreId).future,
-    );
-    if (layer == null) {
-      // No layer to attach ink to. Drop the stroke rather than write a row that
-      // would violate the foreign key on annotations.layer_id.
-      ref.read(liveStrokeProvider.notifier).clear();
-      return;
-    }
+    final repository = await ref.read(annotationRepositoryProvider.future);
+    final layers = await repository.getLayers(widget.page.scoreId);
+    final layer = widget.activeLayerId == null
+        ? layers.firstWhere((l) => l.visible, orElse: () => layers.first)
+        : layers.firstWhere(
+            (l) => l.id == widget.activeLayerId,
+            orElse: () => layers.firstWhere(
+              (l) => l.visible,
+              orElse: () => layers.first,
+            ),
+          );
+
 
     widget.onStrokeCompleted(
       Stroke(
-        id: _newStrokeId(),
+        id: newId(),
         scoreId: widget.page.scoreId,
         pageIndex: widget.page.index,
         layerId: layer.id,
@@ -402,13 +451,4 @@ class _ScorePageViewState extends ConsumerState<ScorePageView> {
   }
 }
 
-int _strokeCounter = 0;
 
-String _newStrokeId() {
-  _strokeCounter++;
-  final micros = DateTime.now()
-      .toUtc()
-      .microsecondsSinceEpoch
-      .toRadixString(36);
-  return '$micros-${_strokeCounter.toRadixString(36)}';
-}

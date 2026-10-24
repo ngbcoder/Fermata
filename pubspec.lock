@@ -371,6 +371,14 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.0"
+  flutter_midi_engine:
+    dependency: transitive
+    description:
+      name: flutter_midi_engine
+      sha256: "09f27084e40009b7836bac2f7086dec2d4474048f6ac94a698dcc37cc5adbba4"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.1.5"
   flutter_riverpod:
     dependency: transitive
     description:

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:fermata_core/fermata_core.dart';
 import 'package:flutter/material.dart';
 
@@ -142,10 +144,26 @@ class _Thumbnail extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    // Generated page thumbnails land in the score's thumbnailPath; until one
-    // exists this shows a neutral placeholder with the page count rather than
-    // an empty box, so a grid of un-thumbnailed scores still reads as
-    // deliberate.
+    // A generated thumbnail, when present, replaces the placeholder. The path
+    // is stored relative to the library root or as an absolute path depending
+    // on the producer, so accept either and fall back to the placeholder when
+    // the file is missing rather than throwing.
+    final thumbnailPath = score.thumbnailPath;
+    if (thumbnailPath != null && thumbnailPath.isNotEmpty) {
+      final file = File(thumbnailPath);
+      if (file.existsSync()) {
+        return Image.file(
+          file,
+          fit: BoxFit.cover,
+          errorBuilder: (_, _, _) => _placeholder(theme),
+        );
+      }
+    }
+
+    return _placeholder(theme);
+  }
+
+  Widget _placeholder(ThemeData theme) {
     return ColoredBox(
       color: theme.colorScheme.surfaceContainerHighest,
       child: Center(
