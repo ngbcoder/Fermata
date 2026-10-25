@@ -2,7 +2,7 @@ name: fermata
 description: "Fermata - a sheet music keeping and practice app"
 publish_to: 'none'
 
-version: 1.0.3+4d fix issues #12/#13)
+version: 1.0.4 fix issues #12/#13)
 # Obtainium compares a release tag against the installed versionName to decide
 # whether an update exists, and Android compares versionCode to decide whether
 # an install is an upgrade. Bump the `+N` on every release; see
